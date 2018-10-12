@@ -1,0 +1,157 @@
+#!/usr/bin/env python
+
+import urllib, urllib2, json, sys, getopt, ConfigParser, os
+
+import requests, urlparse, cookielib
+
+
+def main():
+
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], "hcl", ["help", "configure", "login"])
+    except getopt.GetoptError as err:
+        # print help information and exit:
+        print str(err)  # will print something like "option -a not recognized"
+        usage()
+        sys.exit(2)
+
+    for a in args:
+        if a in ("-c", "configure"):
+            configure()
+        elif a in ("-h", "help"):
+            usage()
+            sys.exit()
+        elif a in ("-l", "login"):
+            login()
+        else:
+            assert False, "unhandled option"
+
+def configure():
+    # configure
+    idp_url = raw_input('IDP URL:')
+
+    if not idp_url:
+        print "IDP URL cannot be empty!"
+        sys.exit(2)
+
+    path = urlparse.urlparse(idp_url).path
+
+    cfgFile = open(os.environ['HOME'] + "/" + "sauth.ini", "w")
+    config = ConfigParser.ConfigParser()
+
+    stripped = path[1:] 
+
+    config.add_section('idp')
+    config.set('idp', 'app', stripped)
+
+    config.write(cfgFile)
+    cfgFile.close()
+    
+    
+def login():
+
+    exists = os.path.isfile(os.environ['HOME'] + "/" + "sauth.ini")
+   
+    if not exists:
+        configure()
+ 
+    config = ConfigParser.ConfigParser()
+    config.read(os.environ['HOME'] + "/" + "sauth.ini")
+
+    idp_ep =  config.get('idp', 'app')
+
+    cookie_jar = cookielib.CookieJar()
+
+    opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cookie_jar))
+    urllib2.install_opener(opener)
+
+    request = urllib2.Request('https://console.jumpcloud.com/userconsole/xsrf')
+
+    xsrfResponse  = urllib2.urlopen(request) 
+
+    xsrfCookieValue    = ""
+    consoleCookieValue = ""
+
+    for cookie in cookie_jar:
+        if cookie.name == "_xsrf":
+            xsrfCookieValue = cookie.value
+        elif cookie.name == "_jumpcloud_user_console_":
+            consoleCookieValue = cookie.value
+
+    jsonString   = xsrfResponse.read()
+
+    jsonObj   = json.loads(jsonString)
+    xsrfToken = jsonObj['xsrf']
+    
+    cookie = {'_xsrf': xsrfCookieValue, '_jumpcloud_user_console_': consoleCookieValue}
+
+    email    = raw_input('JumpCloud Email (eg. john.doe@doeco.com:) ')
+    
+    if not email:
+        print "email cannot be empty!"
+        sys.exit(2)
+
+    password = raw_input('Password: ')
+
+    if not password:
+        print "password cannot be empty!"
+        sys.exit(2)
+
+    mfa      = raw_input('MFA Token: ')
+
+    if not mfa:
+        sys.exit(2)
+        print "mfa cannot be empty!"
+        sys.exit(2)
+
+    values = {
+       	        "context": "sso",
+	        "redirectTo": idp_ep,
+	        "email": email,
+	        "password": password,
+	        "otp": mfa
+             }
+
+    print values
+    print cookie
+
+    headers = {'X-Xsrftoken': xsrfToken, 'Accept': 'application/json', 'Content-Type': 'application/json'}
+
+    r = requests.post("https://console.jumpcloud.com/userconsole/auth", headers=headers, data=values, allow_redirects=False, cookies=cookie)
+
+    print r.content
+    print r.status_code
+
+def usage():
+
+    print '''
+USAGE:
+    Running the configure or login command will walk you throught he values to set automatically.
+
+    Keep in mind that this requires you have access to the SSO Endpoint you are attempting to auth into.
+    
+    The workflow is meant to be:
+
+1.  Configure an SSO Endpoint - this should be but doesn't have to be run before the `sauth login` command:
+
+        ./sauth configure
+      
+        * This will create the $HOME/sauth.ini file.
+        * IDP URL in this case is the SSO Endpoint.  Lets say your SSO Endpoint in JumpCloud was something like
+          the following:
+
+            https://sso.jumpcloud.com/saml2/brony-auth-aws
+
+        * This would be what you enter for IDP URL when running the `sauth configure` command.
+
+
+2.  Login - this will automatically look for $HOME/sauth.ini. If it does not exist it will walk you through configuration options:   
+        ./sauth login
+
+        * If you did not run step (1) it will walk you through configure() method and set it up.
+
+'''
+
+if __name__ == "__main__":
+    main()
+
